@@ -50,7 +50,7 @@ public class BlackListWhiteListDAO {
 
 	private static final Log log = LogFactory.getLog(BlackListWhiteListDAO.class);
 
-	private static final String streamBlacklistQuery = "SELECT apis.API_NAME, apps.NAME, apps.CREATED_BY, bw.MSISDN, " +
+	private static final String streamBlacklistQueryCommonPart = "SELECT apis.API_NAME, apps.NAME, apps.CREATED_BY, bw.MSISDN, " +
 			"bw.ACTION, bw.user, bw.CREATED, bw.LAST_MODIFIED" +
 			" FROM " +
 			OparatorTable.API_BLACKLIST_WHITELIST.getTObject() +
@@ -67,7 +67,41 @@ public class BlackListWhiteListDAO {
 			" AND bw.SERVICE_PROVIDER LIKE ? " +
 			" AND bw.ACTION = ? " +
 			" AND apps.application_id = app_id " +
-			" AND apis.API_ID = bw.API_ID " +
+			" AND apis.API_ID = bw.API_ID ";
+
+	private static final String streamBlacklistQuery = streamBlacklistQueryCommonPart +
+			" LIMIT ?" +
+			" OFFSET ?";
+
+	private static final String streamBlacklistQueryAllSpAllAppAllApi = "(" + streamBlacklistQueryCommonPart +") " +
+			" UNION (SELECT 'All', 'All', '', bw.MSISDN, bw.ACTION, bw.user, bw.CREATED, bw.LAST_MODIFIED " +
+			" FROM api_blacklist_whitelist AS bw " +
+			" WHERE bw.API_ID = '%' AND bw.APP_ID = '%' AND bw.SERVICE_PROVIDER IN ('%', 'All', '_ALL_') AND bw.ACTION = ?) " +
+			" LIMIT ?" +
+			" OFFSET ?";
+
+	private static final String streamBlacklistQueryAllAppAllApi = "(" + streamBlacklistQueryCommonPart +") " +
+			" UNION (SELECT 'All', 'All', '', bw.MSISDN, bw.ACTION, bw.user, bw.CREATED, bw.LAST_MODIFIED " +
+			" FROM api_blacklist_whitelist AS bw " +
+			" WHERE bw.API_ID = '%' AND bw.APP_ID = '%' AND bw.SERVICE_PROVIDER = ? AND bw.ACTION = ?) " +
+			" LIMIT ?" +
+			" OFFSET ?";
+
+	private static final String streamBlacklistQueryAllApi = "(" + streamBlacklistQueryCommonPart +") " +
+			" UNION (SELECT 'All', apps.NAME, apps.CREATED_BY, bw.MSISDN, " +
+			" bw.ACTION, bw.user, bw.CREATED, bw.LAST_MODIFIED" +
+			" FROM " +
+			OparatorTable.API_BLACKLIST_WHITELIST.getTObject() +
+			" AS bw, " +
+			DbUtils.getDbNames().get(DataSourceNames.WSO2AM_DB) +
+			".am_application " +
+			" AS apps " +
+			" WHERE 1=1 " +
+			" AND bw.API_ID = '%' " +
+			" AND bw.APP_ID LIKE ? " +
+			" AND bw.SERVICE_PROVIDER LIKE ? " +
+			" AND bw.ACTION = ? " +
+			" AND apps.application_id = app_id) " +
 			" LIMIT ?" +
 			" OFFSET ?";
 
@@ -295,23 +329,55 @@ public class BlackListWhiteListDAO {
 
 		try {
 			conn = DbUtils.getDbConnection(DataSourceNames.WSO2AM_STATS_DB);
-			ps = conn.prepareStatement(streamBlacklistQuery,ResultSet.TYPE_FORWARD_ONLY,
-					ResultSet.CONCUR_READ_ONLY);
+			if (dto.getApiID().equals("%") && dto.getAppId().equals("%")) {
+				if (dto.getServiceProvider().equals("%")) {
+					ps = conn.prepareStatement(streamBlacklistQueryAllSpAllAppAllApi,ResultSet.TYPE_FORWARD_ONLY,
+							ResultSet.CONCUR_READ_ONLY);
+				} else {
+					ps = conn.prepareStatement(streamBlacklistQueryAllAppAllApi,ResultSet.TYPE_FORWARD_ONLY,
+							ResultSet.CONCUR_READ_ONLY);
+				}
+			} else if (dto.getApiID().equals("%") && !dto.getAppId().equals("%")) {
+				ps = conn.prepareStatement(streamBlacklistQueryAllApi,ResultSet.TYPE_FORWARD_ONLY,
+						ResultSet.CONCUR_READ_ONLY);
+			} else {
+				ps = conn.prepareStatement(streamBlacklistQuery,ResultSet.TYPE_FORWARD_ONLY,
+						ResultSet.CONCUR_READ_ONLY);
+			}
 			ps.setFetchSize(Integer.MIN_VALUE);
 
 			ps.setString(1, dto.getApiID());
 			ps.setString(2,dto.getAppId());
 			ps.setString(3,dto.getServiceProvider());
 			ps.setString(4,dto.getAction());
-			ps.setInt(5, limit);
-			ps.setInt(6, offset);
+			if (dto.getApiID().equals("%") && dto.getAppId().equals("%")) {
+				if (dto.getServiceProvider().equals("%")) {
+					ps.setString(5, dto.getAction());
+					ps.setInt(6, limit);
+					ps.setInt(7, offset);
+				} else {
+					ps.setString(5, dto.getServiceProvider());
+					ps.setString(6, dto.getAction());
+					ps.setInt(7, limit);
+					ps.setInt(8, offset);
+				}
+			} else if (dto.getApiID().equals("%") && !dto.getAppId().equals("%")) {
+				ps.setString(5, dto.getAppId());
+				ps.setString(6, dto.getServiceProvider());
+				ps.setString(7, dto.getAction());
+				ps.setInt(8, limit);
+				ps.setInt(9, offset);
+			} else {
+				ps.setInt(5, limit);
+				ps.setInt(6, offset);
+			}
 
 			rs = ps.executeQuery();
 
 			if(rs.next()){
 				StringBuilder sb = new StringBuilder();
 
-				sb.append("API_NAME, NAME, CREATED_BY, MSISDN, ACTION, ADDED_BY, CREATED, LAST_MODIFIED");
+				sb.append("API_NAME, APP_NAME, CREATED_BY, MSISDN, ACTION, ADDED_BY, CREATED, LAST_MODIFIED");
 				//MOVE WRITING TO STREAM TO SELF CONTAINED METHOD??
 				out.write((sb.toString().getBytes()));
 				out.write("\n".getBytes());
@@ -729,7 +795,7 @@ public class BlackListWhiteListDAO {
 		ResultSet result = null;
 
 		try {
-			java.lang.String sqlQuery = SQLConstants.GET_APP_USER_SUBSCRIPTION_SQL;
+			java.lang.String sqlQuery = SQLConstants.GET_APP_USER_TIER_STATUS_SUBSCRIPTION_SQL;
 			connection = DbUtils.getDbConnection(DataSourceNames.WSO2AM_DB);
 
 			ps = connection.prepareStatement(sqlQuery);
@@ -741,7 +807,45 @@ public class BlackListWhiteListDAO {
 				String appName = result.getString(BlacklistWhitelistConstants.DAOConstants.APPNAME);
 				int appID = result.getInt(BlacklistWhitelistConstants.DAOConstants.APPLICATION_ID);
 				String spName = result.getString(BlacklistWhitelistConstants.DAOConstants.USER_ID);
-				String appUniqueID = appID + ":" + appName + ":" + spName;
+				String appTier = result.getString(BlacklistWhitelistConstants.DAOConstants.APPLICATION_TIER);
+				String appStatus = result.getString(BlacklistWhitelistConstants.DAOConstants.APPLICATION_STATUS);
+				String appUniqueID = appID + ":" + appName + ":" + spName + ":" + appTier + ":" + appStatus;
+				appUniqueIDList.add(appUniqueID);
+			}
+
+			return appUniqueIDList;
+		} catch (SQLException e) {
+			throw new BusinessException(OparatorError.INVALID_OPARATOR_ID);
+		} catch (Exception e) {
+			throw new BusinessException(OparatorError.INVALID_OPARATOR_ID);
+		} finally {
+            DbUtils.closeAllConnections(ps, connection, result);
+        }
+	}
+
+	public List<String> getAllAplicationsByUserWithoutSub(String userID) throws BusinessException {
+		Connection connection = null;
+		PreparedStatement ps = null;
+		ResultSet result = null;
+
+		try {
+			java.lang.String sqlQuery = SQLConstants.GET_ALL_APPS_BY_SP_SQL;
+			connection = DbUtils.getDbConnection(DataSourceNames.WSO2AM_DB);
+
+			ps = connection.prepareStatement(sqlQuery);
+			ps.setString(1, stripDomain(userID));
+			result = ps.executeQuery();
+
+			List<String> appUniqueIDList = new ArrayList<String>();
+			while (result.next()) {
+				String appName = result.getString(BlacklistWhitelistConstants.DAOConstants.NAME);
+				int appID = result.getInt(BlacklistWhitelistConstants.DAOConstants.APPLICATION_ID);
+				String appTier = result.getString(BlacklistWhitelistConstants.DAOConstants.APPLICATION_TIER);
+				String appStatus = result.getString(BlacklistWhitelistConstants.DAOConstants.APPLICATION_STATUS);
+				// Use "CREATED_TIME" DB column to retrive updatedtime Since it's the updating when tier modification happen.
+				String updateTime = result.getString(BlacklistWhitelistConstants.DAOConstants.CREATED_TIME);
+				updateTime = updateTime.replace(":", ".");
+				String appUniqueID = appID + ":" + appName + ":" + appTier + ":" + appStatus + ":" + updateTime;
 				appUniqueIDList.add(appUniqueID);
 			}
 
@@ -761,7 +865,7 @@ public class BlackListWhiteListDAO {
 		ResultSet result = null;
 
 		try {
-			String sqlQuery = SQLConstants.GET_APP_USER_OPERATOR_SUBSCRIPTION_SQL;
+			String sqlQuery = SQLConstants.GET_APP_USER_TIER_STATUS_OPERATOR_SUBSCRIPTION_SQL;
 			connection = DbUtils.getDbConnection(DataSourceNames.WSO2AM_DB);
 
 			ps = connection.prepareStatement(sqlQuery);
@@ -773,7 +877,9 @@ public class BlackListWhiteListDAO {
 			while (result.next()) {
 				String appName = result.getString(BlacklistWhitelistConstants.DAOConstants.APPNAME);
 				int appID = result.getInt(BlacklistWhitelistConstants.DAOConstants.APPLICATION_ID);
-				String appUniqueID = appID + ":" + appName;
+				String appTier = result.getString(BlacklistWhitelistConstants.DAOConstants.APPLICATION_TIER);
+				String appStatus = result.getString(BlacklistWhitelistConstants.DAOConstants.APPLICATION_STATUS);
+				String appUniqueID = appID + ":" + appName + ":" + appTier + ":" + appStatus;
 				appUniqueIDList.add(appUniqueID);
 			}
 
